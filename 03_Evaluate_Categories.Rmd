@@ -1,0 +1,350 @@
+---
+title: "Evaluate_Category_Clusters"
+author: "Gabriel del Valle"
+date: "2024-09-08"
+---
+
+\*\*01_artvee_art_webscrape
+
+Notebook 3/4
+
+Gabriel del Valle 10/08/24 NYC DATA SCIENCE ACADEMY\*\*
+
+The purpose of this project is to create a simplified context to apply content recommendation techniques in an interactive Shiny app.
+
+**Try out the full interactive app! Read the Home page for project details and instructions**
+
+<https://gabrielxdelvalle.shinyapps.io/algo_gallery/>
+
+**For any questions or inquieries about this project please feel free to reach out on Linkedin:**
+
+www.linkedin.com/in/gabriel-del-valle-147616152
+
+This third notebook is used to compare the relative performance of the image score sets with different category combinations, generated in 02_generate_categories. Particularly, the categories being tested are related to color.
+
+These categories used to score images with CLIP were made to be dependent, meaning they sum to 1. Thus the number of categories that can be successfully utilized in an analysis are limited and must be chosen to be widely applicable and most effective at describing the variance of the visual qualities of the artworks. Note: This wouldn't be an issue with independent scores.
+
+There is a "benchmark" dataset with only the categories that have been determined "strong" for the consistent effectiveness at identifying subjects with CLIP:
+
+-   Human_Subject
+
+-   Animal_Subject
+
+-   Architecture_Subject
+
+-   Ornamental_Pattern
+
+-   Abstract
+
+-   Impressionist
+
+-   Highly_Detailed
+
+-   Landscape
+
+In addition there are 3 test datasets, each with a single new category added to the benchmark. These test categories are:
+
+-   Many_Colors
+
+-   Color_Contrast
+
+-   Minimalism
+
+My original (mislead) intention was to compare the relative performance of a set of categories at describing the visual qualities of the artworks was to cluster the artworks by their image scores and use metrics describing the fit of the cluster model (WSS, BSS/TSS ratio, Silhouette Scores) to infer the cohesiveness of the categories.
+
+**However, I concluded from this experiment that cluster metrics are not a valid method for choosing the best set of categories to describe the subjective qualities of artworks using CLIP single label classification.** For the app I chose the Many_Colors dataset and as a result selected 5 clusters.
+
+Cluster models and their metrics mostly signify variance among a combination of variables within a dataset. My idea was based on the assumption that a more effective set of variables for describing artworks would have more coherent scores, therefore less noise, and therefore more consistent variance and better clustering.
+
+However, even if the prior assumption were true, variance among a set of variables is not the same measure as the ability of those variables to describe reality (thus the fault in this approach). **In fact, the opposite to that assumption could be true!** The better a set of variables is at describing the visual qualities of artworks, the more variance you could expect to find among artworks. For example, if applying multi-label classification to provide a full range of scores for each category (making variables independent and not limiting their values to sum to 1) were proven to be much more effective at distinguishing each artwork, it would be a case of variance increasing.
+
+On the other hand, a more effective means of determining the effectiveness of selected categories was PCA graphs, which visualize in 2D how much each variable describes the variance of the dataset. Each vector has a different angle around the origin relative to the dimensional space it defines (the x and y axis representing dim.1 and dim.2, onto which the true 9D vectors are projected onto for summary and visualization) and the magnitude of each vector is its impact on the variance of that dimension (cos2 value).
+
+Read about this analysis in full detail on the blogpost, including more information on the significance of each metric:
+
+<https://nycdatascience.com/blog/student-works/clustering-artworks-by-ai-quantified-visual-qualities-content-recommendation-app/>
+
+**Analysis Structure**:
+
+1.  Load multiple datasets and store in df_list for querying multiple datasets into evaluation functions at once
+
+2.  Graph a barchart of the BSS to TSS ratio of each dataset per number of clusters BSS_TSS_per_cluster( )
+
+3\. Graph a barchart of the average Silhouette Score of each dataset per number of clusters, based on n number of samples. Since there is random variance in the fit of a cluster model, there is also random variance in Silhouettes Scores, thus n number of models is fit and the average Silhouette score for each dataset is evaluated. My macbook pro 2023 m3 could handle up to 6 cluster samples at once, but this number could be increased by not evaluating clusters simultaneously. sampled_silhouette( )
+
+4\. Graph PCA vectors for comparison between datasets
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+library(dplyr)
+library(ggplot2)
+library(cluster)   # For silhouette score
+library(FactoMineR) # For PCA
+library(factoextra) # For better clustering plots
+library(readr)
+
+```
+
+```{r}
+
+# Set the directory where your CSV files are stored
+directory <- "Categories/"
+
+# List all the CSV files in the directory
+file_list <- list.files(path = directory, pattern = "*.csv", full.names = TRUE)
+
+# Initialize an empty list to store the dataframes
+df_list <- list()
+
+# Loop over each file, load the data, and store it in the list
+for (file in file_list) {
+  # Extract the quality name from the file name
+  quality_name <- tools::file_path_sans_ext(basename(file))  # Remove directory and .csv extension
+  
+  # Read the CSV file and store it in the list with the quality name
+  df_list[[quality_name]] <- read.csv(file)
+}
+
+# Now df_list contains a dataframe for each quality
+print(names(df_list))  # List the names of the qualities loaded
+
+```
+
+```{r}
+BSS_TSS_per_cluster <- function(data_list, min_clusters=2, max_clusters=10) {
+  results <- list()
+  
+  # Create an empty dataframe to hold all BSS/TSS ratios for plotting later
+  combined_results <- data.frame(
+    clusters = numeric(),
+    dataset = character(),
+    bss_tss_ratio = numeric()
+  )
+  
+  # Loop through each dataset and calculate BSS/TSS ratios
+  for (name in names(data_list)) {
+    data <- data_list[[name]]
+    bss_tss_ratios <- c()
+    
+    print(paste("Evaluating:", name))
+    
+    for (k in min_clusters:max_clusters) {
+      # Perform K-Means
+      kmeans_result <- kmeans(data, centers = k)
+      
+      # Between SS / Total SS ratio
+      bss <- sum(kmeans_result$betweenss)
+      tss <- sum(kmeans_result$totss)
+      bss_tss_ratios <- c(bss_tss_ratios, bss / tss)
+    }
+    
+    # Store the metrics for this dataset
+    results[[name]] <- list(
+      bss_tss_ratios = bss_tss_ratios
+    )
+    
+    # Add the results to the combined dataframe for plotting
+    for (i in seq_along(bss_tss_ratios)) {
+      combined_results <- rbind(
+        combined_results, 
+        data.frame(clusters = min_clusters + i - 1, dataset = name, bss_tss_ratio = bss_tss_ratios[i])
+      )
+    }
+  }
+  
+  # Plot a bar chart
+  ggplot(combined_results, aes(x = factor(clusters), y = bss_tss_ratio, fill = dataset)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    labs(title = "BSS/TSS Ratio vs Number of Clusters",
+         x = "Number of Clusters", 
+         y = "BSS/TSS Ratio") +
+    theme_minimal() +
+    scale_fill_brewer(palette = "Set3")
+}
+
+
+
+```
+
+```{r}
+
+BSS_TSS_per_cluster(df_list)
+
+
+
+
+
+```
+
+```{r}
+
+# Function to calculate average silhouette score from n_samples for each number of clusters
+sampled_silhouette <- function(df_list, max_clusters = 10, n_samples = 6, num_clusters = NULL) {
+  
+  # Store results for each dataframe in a list
+  silhouette_results <- list()
+  
+  for (df_name in names(df_list)) {
+    
+    # Store silhouette scores for each cluster size (2 to max_clusters)
+    silhouette_scores <- numeric(max_clusters - 1)
+    
+    for (k in 2:max_clusters) {
+      sample_silhouettes <- numeric(n_samples)
+      
+      # Run k-means clustering and calculate silhouette for n_samples
+      for (i in 1:n_samples) {
+        set.seed(i) # Ensure reproducibility
+        km <- kmeans(df_list[[df_name]], centers = k, nstart = 10)
+        dist_matrix <- dist(df_list[[df_name]])
+        sil <- silhouette(km$cluster, dist_matrix)
+        sample_silhouettes[i] <- mean(sil[, 3]) # Extract silhouette score
+      }
+      
+      # Average silhouette score for the current number of clusters
+      silhouette_scores[k - 1] <- mean(sample_silhouettes)
+    }
+    
+    # Store the silhouette scores for the current dataframe
+    silhouette_results[[df_name]] <- silhouette_scores
+  }
+  
+  # Combine the results into a data frame for plotting
+  df_plot <- data.frame(
+    Clusters = rep(2:max_clusters, times = length(df_list)),
+    Silhouette_Score = unlist(silhouette_results),
+    Dataset = rep(names(df_list), each = max_clusters - 1)
+  )
+  
+  # If num_clusters is provided, filter the data for that cluster count only
+  if (!is.null(num_clusters)) {
+    df_plot <- df_plot[df_plot$Clusters == num_clusters, ]
+  }
+  
+  # Plot silhouette score vs number of clusters
+  ggplot(df_plot, aes(x = as.factor(Clusters), y = Silhouette_Score, fill = Dataset)) +
+    geom_bar(stat = "identity", position = position_dodge()) +
+    labs(title = ifelse(is.null(num_clusters), 
+                        "Average Silhouette Score vs Number of Clusters", 
+                        paste("Average Silhouette Score for", num_clusters, "Clusters")), 
+         x = "Number of Clusters", 
+         y = "Average Silhouette Score") +
+    theme_minimal()
+}
+
+
+
+
+```
+
+```{r}
+
+sampled_silhouette(df_list)
+
+
+```
+
+```{r}
+
+evaluate_wss <- function(data_list, min_clusters=2, max_clusters=10) {
+  results <- list()
+  
+  # Create an empty dataframe to hold all WSS values for plotting later
+  combined_results <- data.frame(
+    clusters = numeric(),
+    dataset = character(),
+    wss = numeric()
+  )
+  
+  # Loop through each dataset and calculate WSS for each number of clusters
+  for (name in names(data_list)) {
+    data <- data_list[[name]]
+    wss_values <- c()
+    
+    print(paste("Evaluating:", name))
+    
+    for (k in min_clusters:max_clusters) {
+      # Perform K-Means
+      kmeans_result <- kmeans(data, centers = k)
+      
+      # Store the WSS (within-cluster sum of squares)
+      wss <- kmeans_result$tot.withinss
+      wss_values <- c(wss_values, wss)
+    }
+    
+    # Store the metrics for this dataset
+    results[[name]] <- list(
+      wss_values = wss_values
+    )
+    
+    # Add the results to the combined dataframe for plotting
+    for (i in seq_along(wss_values)) {
+      combined_results <- rbind(
+        combined_results, 
+        data.frame(clusters = min_clusters + i - 1, dataset = name, wss = wss_values[i])
+      )
+    }
+  }
+  
+  # Plot the WSS values for each dataset as a combined bar graph
+  ggplot(combined_results, aes(x = factor(clusters), y = wss, fill = dataset)) +
+    geom_bar(stat = "identity", position = "dodge") +  # Creates bars with dodged positions
+    labs(title = "WSS (Within-Cluster Sum of Squares) vs Number of Clusters",
+         x = "Number of Clusters", 
+         y = "WSS") +
+    theme_minimal() +
+    scale_fill_brewer(palette = "Set3")  # Adds a nice color palette for the bar groups
+}
+
+
+
+
+
+
+```
+
+```{r}
+
+evaluate_wss(df_list)
+
+
+```
+
+```{r}
+# Perform PCA on the dataset
+pca_result <- PCA(df_list['benchmark'], graph = FALSE) # PCA from FactoMineR
+
+  
+# Plot the PCA with modified variable names (removing "benchmark.")
+fviz_pca_var(pca_result, col.var = "cos2", 
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"), 
+             repel = TRUE)
+
+```
+
+```{r}
+# Perform PCA on the dataset
+  pca_result <- PCA(df_list['Many_Colors'], graph = FALSE) # PCA from FactoMineR
+
+
+  
+# Plot the PCA with modified variable names (removing "benchmark.")
+fviz_pca_var(pca_result, col.var = "cos2", 
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"), 
+             repel = TRUE)
+
+```
+
+```{r}
+# Perform PCA on the dataset
+  pca_result <- PCA(df_list['Color_Contrast'], graph = FALSE) # PCA from FactoMineR
+
+
+  
+# Plot the PCA with modified variable names (removing "benchmark.")
+fviz_pca_var(pca_result, col.var = "cos2", 
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"), 
+             repel = TRUE)
+
+```
